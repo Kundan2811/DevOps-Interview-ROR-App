@@ -20,7 +20,7 @@ services:
     image: webserver
     container_name: webserver
     ports:
-      - "8080:8080"
+      - "8080:80"
     networks:
       - app_network
 
