@@ -1,0 +1,35 @@
+name: CI - Build Validation
+
+# Runs on every push and pull request, to any branch. This is a fast
+# sanity check that both Dockerfiles still build cleanly - it does NOT
+# push anything to ECR and does NOT need any AWS credentials, so it's
+# safe to run even on pull requests from forks.
+on:
+  push:
+    branches-ignore: [main] # main is handled by cd.yaml instead
+  pull_request:
+
+jobs:
+  build-validate:
+    name: Build Both Images
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Load shared config
+        run: |
+          while IFS=': ' read -r key value; do
+            [[ -z "$key" || "$key" == \#* ]] && continue
+            echo "${key^^}=$value" >> "$GITHUB_ENV"
+          done < .github/config.yaml
+
+      - name: Build Rails image (validation only, not pushed)
+        run: docker build -t ci-validate-rails:${{ github.sha }} -f docker/app/Dockerfile .
+
+      - name: Build Nginx image for ECS (validation only, not pushed)
+        run: docker build -t ci-validate-nginx:${{ github.sha }} -f docker/nginx/Dockerfile.ecs .
+
+      - name: Build Nginx image for local Compose (validation only, not pushed)
+        run: docker build -t ci-validate-nginx-local:${{ github.sha }} -f docker/nginx/Dockerfile .

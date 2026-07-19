@@ -1,0 +1,103 @@
+name: CD - Build, Push & Deploy to ECS
+
+# Runs only on push to main - builds both Docker images, pushes them to
+# ECR tagged with the git commit SHA (never :latest, since the ECR repos
+# are immutable - see infrastructure/main/ecr.tf), then deploys a new
+# ECS task definition revision and waits for the rollout to stabilize.
+on:
+  push:
+    branches: [main]
+
+# Required for OIDC - lets this workflow request a short-lived AWS token
+# without any AWS access keys stored as GitHub secrets.
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  build-push-deploy:
+    name: Build, Push & Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Load shared config
+        run: |
+          while IFS=': ' read -r key value; do
+            [[ -z "$key" || "$key" == \#* ]] && continue
+            echo "${key^^}=$value" >> "$GITHUB_ENV"
+          done < .github/config.yaml
+
+      # Authenticates to AWS using OIDC - GitHub issues a short-lived token,
+      # AWS verifies it against the trust policy in infrastructure/main/oidc.tf
+      # (which restricts this to only main-branch runs of this exact repo).
+      - name: Configure AWS credentials via OIDC
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_GITHUB_ACTIONS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Login to Amazon ECR
+        id: ecr-login
+        uses: aws-actions/amazon-ecr-login@v2
+
+      - name: Set image tag
+        id: vars
+        run: echo "sha_tag=main-${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push Rails image
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          TAG: ${{ steps.vars.outputs.sha_tag }}
+        run: |
+          docker build -t $REGISTRY/${{ env.ECR_RAILS_REPOSITORY }}:$TAG -f docker/app/Dockerfile .
+          docker push $REGISTRY/${{ env.ECR_RAILS_REPOSITORY }}:$TAG
+
+      # Uses Dockerfile.ecs / default.ecs.conf - the AWS-specific nginx config
+      # that reaches Rails via localhost instead of the container-name DNS
+      # Docker Compose provides locally (see docker/nginx/Dockerfile.ecs).
+      - name: Build and push Nginx image
+        env:
+          REGISTRY: ${{ steps.ecr-login.outputs.registry }}
+          TAG: ${{ steps.vars.outputs.sha_tag }}
+        run: |
+          docker build -t $REGISTRY/${{ env.ECR_NGINX_REPOSITORY }}:$TAG -f docker/nginx/Dockerfile.ecs .
+          docker push $REGISTRY/${{ env.ECR_NGINX_REPOSITORY }}:$TAG
+
+      # Pulls the CURRENTLY deployed task definition as a starting point, so
+      # only the two image references change - every other setting (CPU,
+      # memory, env vars, secrets, roles) stays exactly as Terraform defined.
+      - name: Download current task definition
+        run: |
+          aws ecs describe-task-definition \
+            --task-definition ${{ env.ECS_TASK_FAMILY }} \
+            --query taskDefinition > task-definition.json
+
+      - name: Update Rails image in task definition
+        id: render-rails
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: task-definition.json
+          container-name: rails_app
+          image: ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_RAILS_REPOSITORY }}:${{ steps.vars.outputs.sha_tag }}
+
+      - name: Update Nginx image in task definition
+        id: render-nginx
+        uses: aws-actions/amazon-ecs-render-task-definition@v1
+        with:
+          task-definition: ${{ steps.render-rails.outputs.task-definition }}
+          container-name: nginx
+          image: ${{ steps.ecr-login.outputs.registry }}/${{ env.ECR_NGINX_REPOSITORY }}:${{ steps.vars.outputs.sha_tag }}
+
+      # Registers the new task definition revision, updates the ECS service
+      # to use it, and waits for the rolling deployment to reach a stable,
+      # healthy state before the workflow is considered successful.
+      - name: Deploy to ECS
+        uses: aws-actions/amazon-ecs-deploy-task-definition@v2
+        with:
+          task-definition: ${{ steps.render-nginx.outputs.task-definition }}
+          cluster: ${{ env.ECS_CLUSTER }}
+          service: ${{ env.ECS_SERVICE }}
+          wait-for-service-stability: true

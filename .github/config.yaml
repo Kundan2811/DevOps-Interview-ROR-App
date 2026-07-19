@@ -1,0 +1,14 @@
+# Shared configuration for the CI and CD workflows.
+# NOT itself a workflow - lives outside .github/workflows/ so GitHub doesn't
+# try to execute it. Loaded by both ci.yaml and cd.yaml via a "Load config"
+# step so these values are defined in exactly one place.
+#
+# Keys are uppercased and exported as environment variables by the loader
+# step, e.g. aws_region -> $AWS_REGION.
+
+aws_region: us-east-1
+ecr_rails_repository: devops-assignment-rails-app
+ecr_nginx_repository: devops-assignment-nginx
+ecs_cluster: devops-assignment-cluster
+ecs_service: devops-assignment-service
+ecs_task_family: devops-assignment-task
