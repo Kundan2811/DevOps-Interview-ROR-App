@@ -50,11 +50,17 @@ data "aws_iam_policy_document" "github_actions_assume_role" {
 
     # Restricts this role to ONLY be assumable by workflows running on the
     # main branch of this specific repo - not forks, not other branches,
-    # not other repos. This is the key least-privilege control.
+    # not other repos.
+    #
+    # NOTE: GitHub's OIDC "sub" claim now includes stable numeric org/repo
+    # IDs alongside the names (format: repo:OWNER@ORG_ID/REPO@REPO_ID:ref:...)
+    # rather than the older plain "repo:OWNER/REPO:ref:..." format. The
+    # exact values below (82533352 / 1303194405) were confirmed via
+    # CloudTrail from an actual AssumeRoleWithWebIdentity attempt.
     condition {
-      test     = "StringLike"
+      test     = "StringEquals"
       variable = "token.actions.githubusercontent.com:sub"
-      values   = ["repo:${var.github_repository}:ref:refs/heads/main"]
+      values   = ["repo:Kundan2811@82533352/DevOps-Interview-ROR-App@1303194405:ref:refs/heads/main"]
     }
   }
 }
