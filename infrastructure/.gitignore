@@ -1,0 +1,13 @@
+@"
+# Terraform working directories - auto-generated, never commit
+**/.terraform/
+.terraform.lock.hcl
+
+# Terraform state files - stored remotely in S3, never commit locally
+*.tfstate
+*.tfstate.backup
+
+# Sensitive variable files
+*.tfvars
+*.tfvars.json
+"@ | Out-File -Encoding utf8 infrastructure/.gitignore
